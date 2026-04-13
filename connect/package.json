@@ -3,14 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "description": "Desktop connector for sub2api on Windows, macOS, and Linux.",
-  "homepage": "https://github.com/sub2api/sub2api-connect",
+  "homepage": "https://github.com/sengmu/relayhub",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sub2api/sub2api-connect.git"
+    "url": "https://github.com/sengmu/relayhub.git"
   },
   "author": {
-    "name": "sub2api Team",
-    "email": "noreply@sub2api.local"
+    "name": "sengmu",
+    "email": "linguihong000@gmail.com"
   },
   "type": "module",
   "main": "dist-electron/electron/main.js",

@@ -1,6 +1,8 @@
 import { app } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import electronUpdater from 'electron-updater'
 import type { AppUpdater, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
+
+const { autoUpdater } = electronUpdater
 import type { ProgressInfo } from 'builder-util-runtime'
 import type { UpdateState } from '../src/shared/contracts.js'
 
