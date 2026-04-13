@@ -42,8 +42,9 @@ jobs:
       - name: Ensure GitHub release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          TAG='${{ steps.meta.outputs.tag }}'
+          TAG="${{ steps.meta.outputs.tag }}"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes "Desktop artifacts for $TAG"
 

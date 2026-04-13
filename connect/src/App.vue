@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ApiKeyRecord, AppConfig, ProxyRuntimeState, PublicSettings, UpdateState } from './shared/contracts'
 
+type SectionKey = 'overview' | 'account' | 'keys' | 'templates' | 'updates'
+
 const config = ref<AppConfig | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
 const apiKeys = ref<ApiKeyRecord[]>([])
@@ -16,7 +18,16 @@ const registerInvitationCode = ref('')
 const totpCode = ref('')
 const statusMessage = ref('准备就绪')
 const busy = ref(false)
+const currentSection = ref<SectionKey>('overview')
 let updatePollTimer: number | null = null
+
+const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
+  { key: 'overview', label: '总览', hint: '连接状态与核心信息' },
+  { key: 'account', label: '账户登录', hint: '服务器、登录、注册、2FA' },
+  { key: 'keys', label: 'API Key', hint: '选择 Key 并启动本地代理' },
+  { key: 'templates', label: '接入模板', hint: 'Cherry Studio / OpenWebUI / CLI' },
+  { key: 'updates', label: '软件更新', hint: '检查、下载并安装更新' }
+]
 
 const isLoggedIn = computed(() => !!config.value?.session?.accessToken && !!config.value?.session?.user)
 const needs2FA = computed(() => !!config.value?.session?.requires2FA)
@@ -39,6 +50,16 @@ const updateProgressLabel = computed(() => {
 const updateVersionLabel = computed(() => {
   if (!updateState.value) return '未知'
   return updateState.value.latestVersion || updateState.value.downloadedVersion || updateState.value.currentVersion
+})
+const statusTone = computed(() => {
+  if (proxyState.value?.running) return 'ok'
+  if (updateState.value?.status === 'error') return 'warn'
+  return 'idle'
+})
+const accountBadge = computed(() => {
+  if (needs2FA.value) return '待二次验证'
+  if (isLoggedIn.value) return '已登录'
+  return '未登录'
 })
 
 async function refreshConfig() {
@@ -105,6 +126,7 @@ async function handleRegister() {
     publicSettings.value = result.publicSettings || publicSettings.value
     await refreshConfig()
     await loadKeys()
+    currentSection.value = 'keys'
     statusMessage.value = '注册成功，已自动登录。'
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : '注册失败'
@@ -126,6 +148,7 @@ async function handleLogin() {
     statusMessage.value = result.session.requires2FA ? '请输入二次验证码完成登录。' : '登录成功。'
     if (!result.session.requires2FA) {
       await loadKeys()
+      currentSection.value = 'keys'
     }
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : '登录失败'
@@ -146,6 +169,7 @@ async function handle2FA() {
     publicSettings.value = result.publicSettings || null
     await refreshConfig()
     await loadKeys()
+    currentSection.value = 'keys'
     statusMessage.value = '二次验证成功，已完成登录。'
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : '二次验证失败'
@@ -172,6 +196,7 @@ async function startProxy() {
   busy.value = true
   try {
     proxyState.value = await window.connectApi.startProxy()
+    currentSection.value = 'overview'
     statusMessage.value = `本地代理已启动：${localBaseUrl.value}`
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : '启动代理失败'
@@ -196,6 +221,7 @@ async function checkForUpdates() {
   busy.value = true
   try {
     updateState.value = await window.connectApi.checkForUpdates()
+    currentSection.value = 'updates'
     statusMessage.value = updateState.value.message
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : '检查更新失败'
@@ -209,6 +235,7 @@ async function downloadUpdate() {
   busy.value = true
   try {
     updateState.value = await window.connectApi.downloadUpdate()
+    currentSection.value = 'updates'
     statusMessage.value = updateState.value.message
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : '下载更新失败'
@@ -238,6 +265,7 @@ async function logout() {
     proxyState.value = await window.connectApi.getProxyState()
     password.value = ''
     totpCode.value = ''
+    currentSection.value = 'account'
     statusMessage.value = '已退出登录。'
   } finally {
     busy.value = false
@@ -264,46 +292,154 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="shell">
-    <section class="hero card">
-      <div>
-        <p class="eyebrow">sub2api Connect</p>
-        <h1>像 VPN 一样简单的 AI 连接器</h1>
-        <p class="muted">
-          登录你的 sub2api 服务，选择一个 API Key，然后一键开启本地 OpenAI 兼容入口。
-        </p>
-      </div>
-      <div class="hero-side">
-        <div class="badge" :class="proxyState?.running ? 'ok' : 'idle'">
-          {{ proxyState?.running ? '已连接' : '未连接' }}
+  <main class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-logo">S2</div>
+        <div>
+          <p class="brand-kicker">sub2api Connect</p>
+          <h1>桌面连接器</h1>
+          <p class="muted small-text">沿用 sub2api 侧边栏布局，让连接、Key 和更新都集中管理。</p>
         </div>
-        <div class="small-text">{{ localBaseUrl }}</div>
       </div>
-    </section>
 
-    <section class="grid">
-      <div class="card stack">
-        <h2>1. 服务器与登录</h2>
-        <label>
-          <span>Server URL</span>
-          <input v-model="serverUrl" placeholder="https://your-sub2api.example.com" />
-        </label>
-        <label>
-          <span>邮箱</span>
-          <input v-model="email" placeholder="name@example.com" />
-        </label>
-        <label>
-          <span>密码</span>
-          <input v-model="password" type="password" placeholder="请输入密码" />
-        </label>
-        <div class="row">
-          <button class="secondary" :disabled="busy" @click="saveProfile">保存地址</button>
-          <button class="secondary" :disabled="busy || !registrationEnabled || !serverUrl || !email || !password" @click="handleRegister">注册</button>
-          <button :disabled="busy || !serverUrl || !email || !password" @click="handleLogin">登录</button>
+      <nav class="sidebar-nav">
+        <button
+          v-for="item in navItems"
+          :key="item.key"
+          class="nav-item"
+          :class="{ active: currentSection === item.key }"
+          @click="currentSection = item.key"
+        >
+          <span class="nav-title">{{ item.label }}</span>
+          <span class="nav-hint">{{ item.hint }}</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer card-surface">
+        <div class="status-chip" :class="statusTone">{{ proxyState?.running ? '已连接' : '未连接' }}</div>
+        <div class="sidebar-meta">
+          <span>本地入口</span>
+          <strong>{{ localBaseUrl }}</strong>
         </div>
+        <div class="sidebar-meta">
+          <span>账户状态</span>
+          <strong>{{ accountBadge }}</strong>
+        </div>
+      </div>
+    </aside>
 
-        <div v-if="registrationEnabled" class="subcard">
-          <p class="small-title">注册新账号</p>
+    <section class="content-shell">
+      <header class="topbar card-surface">
+        <div>
+          <p class="eyebrow">{{ navItems.find((item) => item.key === currentSection)?.label }}</p>
+          <h2>{{ publicSettings?.site_name || 'sub2api' }}</h2>
+          <p class="muted">{{ statusMessage }}</p>
+        </div>
+        <div class="topbar-side">
+          <div class="status-chip" :class="statusTone">{{ proxyState?.running ? '代理运行中' : '代理未运行' }}</div>
+          <div class="version-line">{{ updateState?.currentVersion || '0.1.0' }}</div>
+        </div>
+      </header>
+
+      <section v-if="currentSection === 'overview'" class="content-grid overview-grid">
+        <article class="panel card-surface hero-panel">
+          <div>
+            <p class="eyebrow">快速开始</p>
+            <h3>像原版 sub2api 一样，用导航式界面管理连接</h3>
+            <p class="muted">
+              登录你的 sub2api 服务，选择一个 API Key，一键开启本地 OpenAI 兼容入口。
+            </p>
+          </div>
+          <div class="hero-actions">
+            <button :disabled="busy || !selectedKeyId || proxyState?.running" @click="startProxy">启动本地代理</button>
+            <button class="secondary" :disabled="busy || !proxyState?.running" @click="stopProxy">停止代理</button>
+          </div>
+        </article>
+
+        <article class="panel card-surface stack">
+          <div class="section-head">
+            <h3>核心状态</h3>
+            <span class="status-chip" :class="statusTone">{{ proxyState?.running ? '连接正常' : '待连接' }}</span>
+          </div>
+          <div class="kv"><span>站点名</span><strong>{{ publicSettings?.site_name || 'sub2api' }}</strong></div>
+          <div class="kv"><span>服务器地址</span><strong>{{ serverUrl }}</strong></div>
+          <div class="kv"><span>本地 Base URL</span><strong>{{ localBaseUrl }}</strong></div>
+          <div class="kv"><span>选中 Key</span><strong>{{ selectedKeyId ?? '未选择' }}</strong></div>
+          <div class="kv"><span>可用 API Key</span><strong>{{ apiKeys.length }}</strong></div>
+          <div class="kv"><span>最近状态</span><strong>{{ statusMessage }}</strong></div>
+        </article>
+
+        <article class="panel card-surface stack">
+          <h3>账户摘要</h3>
+          <div class="kv"><span>登录状态</span><strong>{{ accountBadge }}</strong></div>
+          <div class="kv"><span>用户名</span><strong>{{ config?.session.user?.username || '未登录' }}</strong></div>
+          <div class="kv"><span>余额</span><strong>{{ config?.session.user?.balance ?? '—' }}</strong></div>
+          <div class="kv"><span>并发</span><strong>{{ config?.session.user?.concurrency ?? '—' }}</strong></div>
+          <div class="row">
+            <button class="secondary" :disabled="busy" @click="currentSection = 'account'">管理账户</button>
+            <button class="secondary" :disabled="busy" @click="currentSection = 'keys'">查看 Key</button>
+          </div>
+        </article>
+
+        <article class="panel card-surface stack">
+          <h3>更新摘要</h3>
+          <div class="kv"><span>当前版本</span><strong>{{ updateState?.currentVersion || '未知' }}</strong></div>
+          <div class="kv"><span>目标版本</span><strong>{{ updateVersionLabel }}</strong></div>
+          <div class="kv"><span>下载进度</span><strong>{{ updateProgressLabel }}</strong></div>
+          <div class="kv"><span>更新状态</span><strong>{{ updateState?.message || '尚未初始化更新模块。' }}</strong></div>
+          <button class="secondary" :disabled="busy || !updateState?.canCheck" @click="checkForUpdates">检查更新</button>
+        </article>
+      </section>
+
+      <section v-else-if="currentSection === 'account'" class="content-grid two-col-grid">
+        <article class="panel card-surface stack">
+          <div class="section-head">
+            <h3>服务器与登录</h3>
+            <span class="status-chip" :class="isLoggedIn ? 'ok' : 'idle'">{{ accountBadge }}</span>
+          </div>
+          <label>
+            <span>Server URL</span>
+            <input v-model="serverUrl" placeholder="https://your-sub2api.example.com" />
+          </label>
+          <label>
+            <span>邮箱</span>
+            <input v-model="email" placeholder="name@example.com" />
+          </label>
+          <label>
+            <span>密码</span>
+            <input v-model="password" type="password" placeholder="请输入密码" />
+          </label>
+          <div class="row">
+            <button class="secondary" :disabled="busy" @click="saveProfile">保存地址</button>
+            <button class="secondary" :disabled="busy || !registrationEnabled || !serverUrl || !email || !password" @click="handleRegister">注册</button>
+            <button :disabled="busy || !serverUrl || !email || !password" @click="handleLogin">登录</button>
+          </div>
+
+          <div v-if="needs2FA" class="subpanel">
+            <p class="small-title">需要二次验证</p>
+            <p class="muted small-text">{{ config?.session.userEmailMasked || '请打开验证器输入 6 位验证码。' }}</p>
+            <label>
+              <span>2FA 验证码</span>
+              <input v-model="totpCode" placeholder="123456" />
+            </label>
+            <button :disabled="busy || !totpCode" @click="handle2FA">完成登录</button>
+          </div>
+
+          <div v-if="isLoggedIn" class="subpanel">
+            <p class="small-title">当前用户</p>
+            <div class="kv"><span>用户名</span><strong>{{ config?.session.user?.username }}</strong></div>
+            <div class="kv"><span>余额</span><strong>{{ config?.session.user?.balance }}</strong></div>
+            <div class="kv"><span>并发</span><strong>{{ config?.session.user?.concurrency }}</strong></div>
+            <div class="row">
+              <button class="secondary" :disabled="busy" @click="loadKeys">刷新 API Key</button>
+              <button class="danger" :disabled="busy" @click="logout">退出</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel card-surface stack">
+          <h3>注册选项</h3>
           <p v-if="turnstileEnabled" class="muted small-text">当前站点开启了 Turnstile。桌面端暂不支持该验证，建议先到网页端注册。</p>
           <label v-if="emailVerifyEnabled">
             <span>邮箱验证码</span>
@@ -317,101 +453,77 @@ onBeforeUnmount(() => {
             <span>邀请码</span>
             <input v-model="registerInvitationCode" placeholder="可选" />
           </label>
-          <p class="muted small-text">注册成功后会自动登录当前桌面客户端。</p>
-        </div>
-        <p v-else class="muted small-text">当前站点未开放注册，请使用已有账号登录。</p>
+          <p class="muted small-text" v-if="registrationEnabled">注册成功后会自动登录当前桌面客户端。</p>
+          <p class="muted small-text" v-else>当前站点未开放注册，请使用已有账号登录。</p>
 
-        <div v-if="needs2FA" class="subcard">
-          <p class="small-title">需要二次验证</p>
-          <p class="muted small-text">{{ config?.session.userEmailMasked || '请打开你的验证器输入 6 位验证码。' }}</p>
-          <label>
-            <span>2FA 验证码</span>
-            <input v-model="totpCode" placeholder="123456" />
-          </label>
-          <button :disabled="busy || !totpCode" @click="handle2FA">完成登录</button>
-        </div>
-
-        <div v-if="isLoggedIn" class="subcard">
-          <p class="small-title">当前用户</p>
-          <div class="kv"><span>用户名</span><strong>{{ config?.session.user?.username }}</strong></div>
-          <div class="kv"><span>余额</span><strong>{{ config?.session.user?.balance }}</strong></div>
-          <div class="kv"><span>并发</span><strong>{{ config?.session.user?.concurrency }}</strong></div>
-          <div class="row">
-            <button class="secondary" :disabled="busy" @click="loadKeys">刷新 API Key</button>
-            <button class="danger" :disabled="busy" @click="logout">退出</button>
+          <div class="subpanel">
+            <p class="small-title">站点能力</p>
+            <div class="kv"><span>开放注册</span><strong>{{ registrationEnabled ? '是' : '否' }}</strong></div>
+            <div class="kv"><span>邮箱验证</span><strong>{{ emailVerifyEnabled ? '开启' : '关闭' }}</strong></div>
+            <div class="kv"><span>优惠码</span><strong>{{ promoCodeEnabled ? '开启' : '关闭' }}</strong></div>
+            <div class="kv"><span>邀请码</span><strong>{{ invitationCodeEnabled ? '开启' : '关闭' }}</strong></div>
           </div>
-        </div>
-      </div>
+        </article>
+      </section>
 
-      <div class="card stack">
-        <h2>2. API Key 与连接</h2>
-        <div class="subcard">
-          <p class="small-title">当前选择</p>
-          <p class="muted small-text">
-            默认自动选择第一个 active API Key。后续可扩展为手动切换、多服务配置和诊断页。
-          </p>
-          <div class="kv"><span>Key ID</span><strong>{{ selectedKeyId ?? '未选择' }}</strong></div>
-          <div class="kv"><span>本地 Base URL</span><strong>{{ localBaseUrl }}</strong></div>
-          <div class="kv"><span>推荐 API Key</span><strong>***</strong></div>
-        </div>
-
-        <div class="list" v-if="apiKeys.length">
-          <article v-for="key in apiKeys" :key="key.id" class="key-item" :class="{ active: key.id === selectedKeyId }">
-            <div>
-              <strong>{{ key.name }}</strong>
-              <p class="muted small-text">ID #{{ key.id }} · {{ key.status }} · 已用 {{ key.quota_used }}/{{ key.quota || '∞' }}</p>
-            </div>
-            <span class="pill" :class="key.status">{{ key.status }}</span>
-          </article>
-        </div>
-        <p v-else class="muted small-text">登录后这里会显示当前账号可用的 API Key 列表。</p>
-
-        <div class="row">
-          <button :disabled="busy || !selectedKeyId || proxyState?.running" @click="startProxy">启动本地代理</button>
-          <button class="secondary" :disabled="busy || !proxyState?.running" @click="stopProxy">停止本地代理</button>
-        </div>
-      </div>
-    </section>
-
-    <section class="grid lower">
-      <div class="card stack">
-        <h2>3. 一键接入模板</h2>
-        <div class="template-grid">
-          <div class="subcard">
-            <p class="small-title">Cherry Studio</p>
-            <p class="muted small-text">Base URL 填 {{ localBaseUrl }}，API Key 填任意字符串或 ***。</p>
-          </div>
-          <div class="subcard">
-            <p class="small-title">OpenWebUI</p>
-            <p class="muted small-text">新增 OpenAI 兼容提供商，地址指向 {{ localBaseUrl }}。</p>
-          </div>
-          <div class="subcard">
-            <p class="small-title">Claude Code</p>
-            <p class="muted small-text">后续补 CLI 一键配置脚本；当前先复制本地 Base URL。</p>
-          </div>
-          <div class="subcard">
-            <p class="small-title">Codex</p>
-            <p class="muted small-text">通过 OpenAI 兼容模式指向本地代理，减少用户直接接触远端配置。</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="card stack">
-        <h2>4. 状态与诊断</h2>
-        <div class="subcard">
-          <div class="kv"><span>站点名</span><strong>{{ publicSettings?.site_name || 'sub2api' }}</strong></div>
-          <div class="kv"><span>版本</span><strong>{{ publicSettings?.version || '未知' }}</strong></div>
-          <div class="kv"><span>开放注册</span><strong>{{ registrationEnabled ? '是' : '否' }}</strong></div>
-          <div class="kv"><span>邮箱验证</span><strong>{{ emailVerifyEnabled ? '开启' : '关闭' }}</strong></div>
-          <div class="kv"><span>代理状态</span><strong>{{ proxyState?.running ? '运行中' : '未运行' }}</strong></div>
-          <div class="kv"><span>最近状态</span><strong>{{ statusMessage }}</strong></div>
-          <div class="kv" v-if="proxyState?.lastError"><span>最近错误</span><strong>{{ proxyState.lastError }}</strong></div>
-        </div>
-
-        <div class="subcard">
+      <section v-else-if="currentSection === 'keys'" class="content-grid two-col-grid">
+        <article class="panel card-surface stack">
           <div class="section-head">
-            <p class="small-title">软件更新</p>
-            <span class="pill" :class="updateState?.status === 'downloaded' ? 'active' : 'inactive'">
+            <h3>API Key 与连接</h3>
+            <span class="status-chip" :class="selectedKeyId ? 'ok' : 'idle'">{{ selectedKeyId ? '已就绪' : '未选择' }}</span>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">当前选择</p>
+            <div class="kv"><span>Key ID</span><strong>{{ selectedKeyId ?? '未选择' }}</strong></div>
+            <div class="kv"><span>本地 Base URL</span><strong>{{ localBaseUrl }}</strong></div>
+            <div class="kv"><span>代理状态</span><strong>{{ proxyState?.running ? '运行中' : '未运行' }}</strong></div>
+          </div>
+          <div class="row">
+            <button class="secondary" :disabled="busy" @click="loadKeys">刷新列表</button>
+            <button :disabled="busy || !selectedKeyId || proxyState?.running" @click="startProxy">启动本地代理</button>
+            <button class="secondary" :disabled="busy || !proxyState?.running" @click="stopProxy">停止代理</button>
+          </div>
+        </article>
+
+        <article class="panel card-surface stack">
+          <h3>API Key 列表</h3>
+          <div class="list" v-if="apiKeys.length">
+            <article v-for="key in apiKeys" :key="key.id" class="key-item" :class="{ active: key.id === selectedKeyId }">
+              <div>
+                <strong>{{ key.name }}</strong>
+                <p class="muted small-text">ID #{{ key.id }} · {{ key.status }} · 已用 {{ key.quota_used }}/{{ key.quota || '∞' }}</p>
+              </div>
+              <span class="status-chip" :class="key.id === selectedKeyId ? 'ok' : 'idle'">{{ key.status }}</span>
+            </article>
+          </div>
+          <p v-else class="muted small-text">登录后这里会显示当前账号可用的 API Key 列表。</p>
+        </article>
+      </section>
+
+      <section v-else-if="currentSection === 'templates'" class="content-grid template-grid">
+        <article class="panel card-surface stack">
+          <h3>Cherry Studio</h3>
+          <p class="muted">Base URL 填 {{ localBaseUrl }}，API Key 填任意字符串或 ***。</p>
+        </article>
+        <article class="panel card-surface stack">
+          <h3>OpenWebUI</h3>
+          <p class="muted">新增 OpenAI 兼容提供商，地址指向 {{ localBaseUrl }}。</p>
+        </article>
+        <article class="panel card-surface stack">
+          <h3>Claude Code</h3>
+          <p class="muted">后续可补 CLI 一键配置脚本；当前先复制本地 Base URL。</p>
+        </article>
+        <article class="panel card-surface stack">
+          <h3>Codex</h3>
+          <p class="muted">通过 OpenAI 兼容模式指向本地代理，减少用户直接接触远端配置。</p>
+        </article>
+      </section>
+
+      <section v-else class="content-grid two-col-grid">
+        <article class="panel card-surface stack">
+          <div class="section-head">
+            <h3>软件更新</h3>
+            <span class="status-chip" :class="updateState?.status === 'downloaded' ? 'ok' : updateState?.status === 'error' ? 'warn' : 'idle'">
               {{ updateState?.status || 'idle' }}
             </span>
           </div>
@@ -424,11 +536,21 @@ onBeforeUnmount(() => {
             <button :disabled="busy || !updateState?.canDownload" @click="downloadUpdate">下载更新</button>
             <button class="secondary" :disabled="busy || !updateState?.canInstall" @click="installUpdate">重启安装</button>
           </div>
-          <p class="muted small-text">
-            开发模式下会显示“不可用”；只有安装后的正式应用才支持自动更新。
-          </p>
-        </div>
-      </div>
+          <p class="muted small-text">开发模式下会显示“不可用”；只有安装后的正式应用才支持自动更新。</p>
+        </article>
+
+        <article class="panel card-surface stack">
+          <h3>发布说明</h3>
+          <div class="subpanel">
+            <p class="small-title">自动推送更新</p>
+            <p class="muted small-text">打 tag 后，GitHub Actions 会构建多平台安装包，并把产物与 latest*.yml 元数据发布到 GitHub Release，供客户端更新模块拉取。</p>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">当前环境提醒</p>
+            <p class="muted small-text">只有正式打包后的应用才会真正对接更新通道；本地 `npm run dev` 仅用于界面和流程开发。</p>
+          </div>
+        </article>
+      </section>
     </section>
   </main>
 </template>
