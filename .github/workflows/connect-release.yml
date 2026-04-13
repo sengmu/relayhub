@@ -90,6 +90,10 @@ jobs:
         run: npm run typecheck
         working-directory: connect
 
+      - name: Build app bundles
+        run: npm run build
+        working-directory: connect
+
       - name: Build and publish desktop artifacts
         run: npx electron-builder --publish always ${{ matrix.builder_args }}
         working-directory: connect
