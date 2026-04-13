@@ -1,0 +1,97 @@
+name: Connect Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build desktop installers for (e.g. v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: connect-release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Resolve tag and version
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG='${{ github.event.inputs.tag }}'
+          else
+            TAG='${GITHUB_REF#refs/tags/}'
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG='${{ steps.meta.outputs.tag }}'
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes "Desktop artifacts for $TAG"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            builder_args: --linux AppImage deb tar.gz
+          - os: windows-latest
+            builder_args: --win nsis zip
+          - os: macos-latest
+            builder_args: --mac dmg zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: connect/package-lock.json
+
+      - name: Sync connect package metadata to current repository
+        shell: bash
+        run: |
+          VERSION='${{ needs.prepare.outputs.version }}'
+          REPO='${{ github.repository }}'
+          REPO_URL="https://github.com/${REPO}"
+          node -e "const fs=require('fs'); const path='connect/package.json'; const pkg=JSON.parse(fs.readFileSync(path,'utf8')); const version=process.argv[1]; const repo=process.argv[2]; const repoUrl=process.argv[3]; pkg.version=version; pkg.homepage=repoUrl; pkg.repository={type:'git', url: repoUrl + '.git'}; fs.writeFileSync(path, JSON.stringify(pkg, null, 2)+'\\n');" "$VERSION" "$REPO" "$REPO_URL"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: connect
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: connect
+
+      - name: Build and publish desktop artifacts
+        run: npx electron-builder --publish always ${{ matrix.builder_args }}
+        working-directory: connect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

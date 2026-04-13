@@ -325,6 +325,33 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 	return user.CanBindGroup(group.ID, group.IsExclusive)
 }
 
+func (s *APIKeyService) resolveImplicitGroupID(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*int64, error) {
+	if req.GroupID != nil || s.userSubRepo == nil {
+		return req.GroupID, nil
+	}
+
+	activeSubscriptions, err := s.userSubRepo.ListActiveByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list active subscriptions: %w", err)
+	}
+
+	uniqueGroupIDs := make(map[int64]struct{})
+	for _, sub := range activeSubscriptions {
+		uniqueGroupIDs[sub.GroupID] = struct{}{}
+	}
+
+	if len(uniqueGroupIDs) != 1 {
+		return nil, nil
+	}
+
+	for groupID := range uniqueGroupIDs {
+		gid := groupID
+		return &gid, nil
+	}
+
+	return nil, nil
+}
+
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
 	// 验证用户存在
@@ -345,6 +372,14 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		if invalid := ip.ValidateIPPatterns(req.IPBlacklist); len(invalid) > 0 {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidIPPattern, invalid)
 		}
+	}
+
+	resolvedGroupID, err := s.resolveImplicitGroupID(ctx, userID, req)
+	if err != nil {
+		return nil, err
+	}
+	if resolvedGroupID != nil {
+		req.GroupID = resolvedGroupID
 	}
 
 	// 验证分组权限（如果指定了分组）
