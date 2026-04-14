@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ApiKeyRecord, AppConfig, ProxyRuntimeState, PublicSettings, UpdateState } from './shared/contracts'
 
-type SectionKey = 'overview' | 'account' | 'keys' | 'templates' | 'updates'
+type SectionKey = 'overview' | 'account' | 'billing' | 'keys' | 'templates' | 'updates'
 
 const config = ref<AppConfig | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
@@ -24,6 +24,7 @@ let updatePollTimer: number | null = null
 const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: 'overview', label: '总览', hint: '连接状态与核心信息' },
   { key: 'account', label: '账户登录', hint: '服务器、登录、注册、2FA' },
+  { key: 'billing', label: '订阅与额度', hint: '余额、用量与续费建议' },
   { key: 'keys', label: 'API Key', hint: '选择 Key 并启动本地代理' },
   { key: 'templates', label: '接入模板', hint: 'Cherry Studio / OpenWebUI / CLI' },
   { key: 'updates', label: '软件更新', hint: '检查、下载并安装更新' }
@@ -61,6 +62,89 @@ const accountBadge = computed(() => {
   if (isLoggedIn.value) return '已登录'
   return '未登录'
 })
+const currentNav = computed(() => navItems.find((item) => item.key === currentSection.value) ?? navItems[0])
+const activeKey = computed(() => apiKeys.value.find((key) => key.id === selectedKeyId.value) ?? null)
+const keyQuotaSummary = computed(() => {
+  const keys = apiKeys.value
+  const totalQuota = keys.reduce((sum, key) => sum + (Number.isFinite(key.quota) ? key.quota : 0), 0)
+  const totalUsed = keys.reduce((sum, key) => sum + (Number.isFinite(key.quota_used) ? key.quota_used : 0), 0)
+  const activeKeys = keys.filter((key) => key.status === 'active').length
+  const quotaPct = totalQuota > 0 ? Math.min(100, (totalUsed / totalQuota) * 100) : 0
+  const expiringKeys = keys.filter((key) => {
+    if (!key.expires_at) return false
+    const expiresAt = new Date(key.expires_at).getTime()
+    return Number.isFinite(expiresAt) && expiresAt - Date.now() <= 1000 * 60 * 60 * 24 * 30 && expiresAt > Date.now()
+  }).length
+  const nextExpiry = keys
+    .filter((key) => key.expires_at)
+    .map((key) => ({ name: key.name, expiresAt: new Date(key.expires_at as string).getTime() }))
+    .filter((item) => Number.isFinite(item.expiresAt))
+    .sort((a, b) => a.expiresAt - b.expiresAt)[0] ?? null
+
+  return {
+    totalQuota,
+    totalUsed,
+    quotaPct,
+    activeKeys,
+    expiringKeys,
+    nextExpiry,
+    status: quotaPct >= 90 ? 'warn' : activeKeys > 0 ? 'ok' : 'idle'
+  }
+})
+const billingSummary = computed(() => {
+  const user = config.value?.session.user
+  return [
+    {
+      label: '当前余额',
+      value: user?.balance ?? '—',
+      detail: user ? '余额可用于继续开通与续费' : '登录后可查看账户余额'
+    },
+    {
+      label: '额度使用',
+      value: keyQuotaSummary.value.totalQuota > 0 ? `${keyQuotaSummary.value.quotaPct.toFixed(1)}%` : '—',
+      detail: keyQuotaSummary.value.totalQuota > 0 ? `${keyQuotaSummary.value.totalUsed}/${keyQuotaSummary.value.totalQuota}` : '登录后会展示 Key 额度'
+    },
+    {
+      label: '活跃 Key',
+      value: keyQuotaSummary.value.activeKeys,
+      detail: `${apiKeys.value.length} 个 Key 中可直接接入` 
+    },
+    {
+      label: '近期到期',
+      value: keyQuotaSummary.value.expiringKeys,
+      detail: keyQuotaSummary.value.nextExpiry ? `${keyQuotaSummary.value.nextExpiry.name} · ${formatDate(keyQuotaSummary.value.nextExpiry.expiresAt)}` : '暂无到期 Key'
+    }
+  ]
+})
+const dateFormatter = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' })
+function formatDate(value: string | number | Date | null | undefined) {
+  if (!value) return '—'
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return dateFormatter.format(date)
+}
+const overviewStats = computed(() => [
+  {
+    label: '连接状态',
+    value: proxyState.value?.running ? '在线' : '未启动',
+    detail: proxyState.value?.running ? '本地代理已经对外提供 OpenAI 兼容入口' : '先登录并选择一个 API Key'
+  },
+  {
+    label: '当前账号',
+    value: config.value?.session.user?.username || accountBadge.value,
+    detail: config.value?.session.user?.balance != null ? `余额 ${config.value.session.user.balance}` : '登录后可查看余额与并发'
+  },
+  {
+    label: '已选 Key',
+    value: activeKey.value?.name || '未选择',
+    detail: activeKey.value ? `ID #${activeKey.value.id}` : '前往 API Key 页面选择'
+  },
+  {
+    label: '版本更新',
+    value: updateVersionLabel.value,
+    detail: updateState.value?.message || '可随时检查新版本'
+  }
+])
 
 async function refreshConfig() {
   config.value = await window.connectApi.getConfig()
@@ -299,7 +383,7 @@ onBeforeUnmount(() => {
         <div>
           <p class="brand-kicker">sub2api Connect</p>
           <h1>桌面连接器</h1>
-          <p class="muted small-text">沿用 sub2api 侧边栏布局，让连接、Key 和更新都集中管理。</p>
+          <p class="muted small-text">参考 derouter.ai 的简洁产品风格，突出入口、状态与关键动作。</p>
         </div>
       </div>
 
@@ -317,7 +401,7 @@ onBeforeUnmount(() => {
       </nav>
 
       <div class="sidebar-footer card-surface">
-        <div class="status-chip" :class="statusTone">{{ proxyState?.running ? '已连接' : '未连接' }}</div>
+        <div class="status-chip" :class="statusTone">{{ proxyState?.running ? '代理已连接' : '等待连接' }}</div>
         <div class="sidebar-meta">
           <span>本地入口</span>
           <strong>{{ localBaseUrl }}</strong>
@@ -326,70 +410,85 @@ onBeforeUnmount(() => {
           <span>账户状态</span>
           <strong>{{ accountBadge }}</strong>
         </div>
+        <div class="sidebar-meta">
+          <span>当前版本</span>
+          <strong>{{ updateState?.currentVersion || '未知' }}</strong>
+        </div>
       </div>
     </aside>
 
     <section class="content-shell">
-      <header class="topbar card-surface">
-        <div>
-          <p class="eyebrow">{{ navItems.find((item) => item.key === currentSection)?.label }}</p>
+      <header class="topbar">
+        <div class="topbar-copy">
+          <p class="eyebrow">{{ currentNav.label }}</p>
           <h2>{{ publicSettings?.site_name || 'sub2api' }}</h2>
-          <p class="muted">{{ statusMessage }}</p>
+          <p class="lead">{{ currentNav.hint }}</p>
         </div>
         <div class="topbar-side">
-          <div class="status-chip" :class="statusTone">{{ proxyState?.running ? '代理运行中' : '代理未运行' }}</div>
-          <div class="version-line">{{ updateState?.currentVersion || '0.1.0' }}</div>
+          <div class="status-chip" :class="statusTone">{{ proxyState?.running ? '运行中' : '未运行' }}</div>
+          <p class="version-line">{{ statusMessage }}</p>
         </div>
       </header>
 
-      <section v-if="currentSection === 'overview'" class="content-grid overview-grid">
-        <article class="panel card-surface hero-panel">
-          <div>
-            <p class="eyebrow">快速开始</p>
-            <h3>像原版 sub2api 一样，用导航式界面管理连接</h3>
-            <p class="muted">
-              登录你的 sub2api 服务，选择一个 API Key，一键开启本地 OpenAI 兼容入口。
+      <section v-if="currentSection === 'overview'" class="content-grid">
+        <article class="hero-panel card-surface">
+          <div class="hero-copy">
+            <p class="eyebrow">Affordable AI for your desktop</p>
+            <h3>把登录、Key、代理入口与更新，压缩成一套足够清晰的桌面工作台</h3>
+            <p class="muted hero-text">
+              先连接你的 sub2api 服务，再选择 API Key，即可把本地入口接给 Cherry Studio、OpenWebUI、Claude Code 或其他 OpenAI 兼容工具。
             </p>
+            <div class="hero-actions">
+              <button :disabled="busy || !selectedKeyId || proxyState?.running" @click="startProxy">启动本地代理</button>
+              <button class="secondary" :disabled="busy || !proxyState?.running" @click="stopProxy">停止代理</button>
+              <button class="secondary" :disabled="busy" @click="currentSection = 'billing'">查看订阅</button>
+            </div>
           </div>
-          <div class="hero-actions">
-            <button :disabled="busy || !selectedKeyId || proxyState?.running" @click="startProxy">启动本地代理</button>
-            <button class="secondary" :disabled="busy || !proxyState?.running" @click="stopProxy">停止代理</button>
-          </div>
-        </article>
-
-        <article class="panel card-surface stack">
-          <div class="section-head">
-            <h3>核心状态</h3>
-            <span class="status-chip" :class="statusTone">{{ proxyState?.running ? '连接正常' : '待连接' }}</span>
-          </div>
-          <div class="kv"><span>站点名</span><strong>{{ publicSettings?.site_name || 'sub2api' }}</strong></div>
-          <div class="kv"><span>服务器地址</span><strong>{{ serverUrl }}</strong></div>
-          <div class="kv"><span>本地 Base URL</span><strong>{{ localBaseUrl }}</strong></div>
-          <div class="kv"><span>选中 Key</span><strong>{{ selectedKeyId ?? '未选择' }}</strong></div>
-          <div class="kv"><span>可用 API Key</span><strong>{{ apiKeys.length }}</strong></div>
-          <div class="kv"><span>最近状态</span><strong>{{ statusMessage }}</strong></div>
-        </article>
-
-        <article class="panel card-surface stack">
-          <h3>账户摘要</h3>
-          <div class="kv"><span>登录状态</span><strong>{{ accountBadge }}</strong></div>
-          <div class="kv"><span>用户名</span><strong>{{ config?.session.user?.username || '未登录' }}</strong></div>
-          <div class="kv"><span>余额</span><strong>{{ config?.session.user?.balance ?? '—' }}</strong></div>
-          <div class="kv"><span>并发</span><strong>{{ config?.session.user?.concurrency ?? '—' }}</strong></div>
-          <div class="row">
-            <button class="secondary" :disabled="busy" @click="currentSection = 'account'">管理账户</button>
-            <button class="secondary" :disabled="busy" @click="currentSection = 'keys'">查看 Key</button>
+          <div class="hero-summary">
+            <div v-for="item in overviewStats" :key="item.label" class="metric-card">
+              <span class="metric-label">{{ item.label }}</span>
+              <strong class="metric-value">{{ item.value }}</strong>
+              <span class="metric-detail">{{ item.detail }}</span>
+            </div>
           </div>
         </article>
 
-        <article class="panel card-surface stack">
-          <h3>更新摘要</h3>
-          <div class="kv"><span>当前版本</span><strong>{{ updateState?.currentVersion || '未知' }}</strong></div>
-          <div class="kv"><span>目标版本</span><strong>{{ updateVersionLabel }}</strong></div>
-          <div class="kv"><span>下载进度</span><strong>{{ updateProgressLabel }}</strong></div>
-          <div class="kv"><span>更新状态</span><strong>{{ updateState?.message || '尚未初始化更新模块。' }}</strong></div>
-          <button class="secondary" :disabled="busy || !updateState?.canCheck" @click="checkForUpdates">检查更新</button>
-        </article>
+        <div class="overview-grid">
+          <article class="panel card-surface stack">
+            <div class="section-head">
+              <h3>核心状态</h3>
+              <span class="status-chip" :class="statusTone">{{ proxyState?.running ? '连接正常' : '待连接' }}</span>
+            </div>
+            <div class="kv"><span>站点名</span><strong>{{ publicSettings?.site_name || 'sub2api' }}</strong></div>
+            <div class="kv"><span>服务器地址</span><strong>{{ serverUrl }}</strong></div>
+            <div class="kv"><span>本地 Base URL</span><strong>{{ localBaseUrl }}</strong></div>
+            <div class="kv"><span>选中 Key</span><strong>{{ activeKey?.name || '未选择' }}</strong></div>
+            <div class="kv"><span>可用 API Key</span><strong>{{ apiKeys.length }}</strong></div>
+          </article>
+
+          <article class="panel card-surface stack">
+            <h3>账户摘要</h3>
+            <div class="kv"><span>登录状态</span><strong>{{ accountBadge }}</strong></div>
+            <div class="kv"><span>用户名</span><strong>{{ config?.session.user?.username || '未登录' }}</strong></div>
+            <div class="kv"><span>余额</span><strong>{{ config?.session.user?.balance ?? '—' }}</strong></div>
+            <div class="kv"><span>并发</span><strong>{{ config?.session.user?.concurrency ?? '—' }}</strong></div>
+            <div class="row">
+              <button class="secondary" :disabled="busy" @click="currentSection = 'account'">管理账户</button>
+              <button class="secondary" :disabled="busy" @click="currentSection = 'keys'">查看 Key</button>
+            </div>
+          </article>
+
+          <article class="panel card-surface stack">
+            <h3>接入准备</h3>
+            <div class="kv"><span>本地入口</span><strong>{{ localBaseUrl }}</strong></div>
+            <div class="kv"><span>推荐流程</span><strong>登录 → 选 Key → 启动代理</strong></div>
+            <div class="kv"><span>当前阶段</span><strong>{{ proxyState?.running ? '可直接接入' : '尚未完成连接' }}</strong></div>
+            <div class="row">
+              <button class="secondary" :disabled="busy" @click="currentSection = 'templates'">查看模板</button>
+              <button class="secondary" :disabled="busy" @click="currentSection = 'updates'">软件更新</button>
+            </div>
+          </article>
+        </div>
       </section>
 
       <section v-else-if="currentSection === 'account'" class="content-grid two-col-grid">
@@ -433,14 +532,15 @@ onBeforeUnmount(() => {
             <div class="kv"><span>并发</span><strong>{{ config?.session.user?.concurrency }}</strong></div>
             <div class="row">
               <button class="secondary" :disabled="busy" @click="loadKeys">刷新 API Key</button>
+              <button class="secondary" :disabled="busy" @click="currentSection = 'billing'">查看订阅</button>
               <button class="danger" :disabled="busy" @click="logout">退出</button>
             </div>
           </div>
         </article>
 
         <article class="panel card-surface stack">
-          <h3>注册选项</h3>
-          <p v-if="turnstileEnabled" class="muted small-text">当前站点开启了 Turnstile。桌面端暂不支持该验证，建议先到网页端注册。</p>
+          <h3>注册与站点能力</h3>
+          <p v-if="turnstileEnabled" class="muted small-text">当前站点开启了 Turnstile。桌面端暂不支持该验证，建议先在网页端注册。</p>
           <label v-if="emailVerifyEnabled">
             <span>邮箱验证码</span>
             <input v-model="registerVerifyCode" placeholder="如站点启用邮箱验证，请填写验证码" />
@@ -474,6 +574,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="subpanel">
             <p class="small-title">当前选择</p>
+            <div class="kv"><span>Key 名称</span><strong>{{ activeKey?.name || '未选择' }}</strong></div>
             <div class="kv"><span>Key ID</span><strong>{{ selectedKeyId ?? '未选择' }}</strong></div>
             <div class="kv"><span>本地 Base URL</span><strong>{{ localBaseUrl }}</strong></div>
             <div class="kv"><span>代理状态</span><strong>{{ proxyState?.running ? '运行中' : '未运行' }}</strong></div>
@@ -500,20 +601,76 @@ onBeforeUnmount(() => {
         </article>
       </section>
 
+      <section v-else-if="currentSection === 'billing'" class="content-grid two-col-grid">
+        <article class="panel card-surface stack">
+          <div class="section-head">
+            <h3>订阅与额度</h3>
+            <span class="status-chip" :class="keyQuotaSummary.status">{{ keyQuotaSummary.status === 'warn' ? '接近上限' : keyQuotaSummary.status === 'ok' ? '正常' : '待连接' }}</span>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">额度进度</p>
+            <div class="progress-track">
+              <div class="progress-fill" :style="{ width: `${keyQuotaSummary.quotaPct}%` }"></div>
+            </div>
+            <div class="progress-meta">
+              <span>{{ keyQuotaSummary.totalUsed }}</span>
+              <strong>{{ keyQuotaSummary.totalQuota || '—' }}</strong>
+              <span>{{ keyQuotaSummary.totalQuota > 0 ? `${keyQuotaSummary.quotaPct.toFixed(1)}% 已使用` : '暂无额度数据' }}</span>
+            </div>
+          </div>
+          <div v-for="item in billingSummary" :key="item.label" class="kv">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
+          <div class="row">
+            <button class="secondary" :disabled="busy || !isLoggedIn" @click="loadKeys">刷新额度</button>
+            <button :disabled="busy || !isLoggedIn" @click="currentSection = 'keys'">管理 Key</button>
+          </div>
+        </article>
+
+        <article class="panel card-surface stack">
+          <h3>续费建议</h3>
+          <div class="subpanel">
+            <p class="small-title">下一步操作</p>
+            <p class="muted small-text">
+              {{ !isLoggedIn ? '先登录账户，再刷新 Key 与额度。' : keyQuotaSummary.totalQuota === 0 ? '当前账号还没有可用额度或 Key，请先到后台创建 API Key。' : keyQuotaSummary.quotaPct >= 90 ? '当前额度接近上限，建议尽快续费或切换到更高配的 Key。' : '额度状态正常，可以直接进入 Key 页面启动本地代理。' }}
+            </p>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">账户摘要</p>
+            <div class="billing-grid">
+              <div v-for="item in billingSummary" :key="item.label" class="billing-card">
+                <span class="metric-label">{{ item.label }}</span>
+                <strong class="metric-value">{{ item.value }}</strong>
+                <span class="metric-detail">{{ item.detail }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <button class="secondary" :disabled="busy" @click="currentSection = 'overview'">返回总览</button>
+            <button class="secondary" :disabled="busy" @click="currentSection = 'templates'">查看模板</button>
+          </div>
+        </article>
+      </section>
+
       <section v-else-if="currentSection === 'templates'" class="content-grid template-grid">
         <article class="panel card-surface stack">
+          <p class="eyebrow">Template</p>
           <h3>Cherry Studio</h3>
           <p class="muted">Base URL 填 {{ localBaseUrl }}，API Key 填任意字符串或 ***。</p>
         </article>
         <article class="panel card-surface stack">
+          <p class="eyebrow">Template</p>
           <h3>OpenWebUI</h3>
           <p class="muted">新增 OpenAI 兼容提供商，地址指向 {{ localBaseUrl }}。</p>
         </article>
         <article class="panel card-surface stack">
+          <p class="eyebrow">CLI</p>
           <h3>Claude Code</h3>
           <p class="muted">后续可补 CLI 一键配置脚本；当前先复制本地 Base URL。</p>
         </article>
         <article class="panel card-surface stack">
+          <p class="eyebrow">CLI</p>
           <h3>Codex</h3>
           <p class="muted">通过 OpenAI 兼容模式指向本地代理，减少用户直接接触远端配置。</p>
         </article>

@@ -285,8 +285,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
-
-const { t } = useI18n()
 import { adminAPI } from '@/api/admin'
 import type {
   DashboardStats,
@@ -302,7 +300,6 @@ import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Select from '@/components/common/Select.vue'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
 import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
-
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -314,6 +311,8 @@ import {
   Filler
 } from 'chart.js'
 import { Line } from 'vue-chartjs'
+
+const { t } = useI18n()
 
 // Register Chart.js components
 ChartJS.register(
@@ -374,15 +373,10 @@ const granularityOptions = computed(() => [
   { value: 'hour', label: t('admin.dashboard.hour') }
 ])
 
-// Dark mode detection
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
-
 // Chart colors
 const chartColors = computed(() => ({
-  text: isDarkMode.value ? '#e5e7eb' : '#374151',
-  grid: isDarkMode.value ? '#374151' : '#e5e7eb'
+  text: '#475569',
+  grid: '#e2e8f0'
 }))
 
 // Line chart options (for user trend chart)
