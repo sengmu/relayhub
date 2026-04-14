@@ -46,6 +46,21 @@ export interface ProxySettings {
   selectedApiKeyId?: number
 }
 
+export interface ConnectionProfile {
+  id: string
+  name: string
+  serverUrl: string
+  email?: string
+  listenHost: string
+  listenPort: number
+  remoteBaseUrl: string
+  selectedApiKey?: string
+  selectedApiKeyId?: number
+  notes?: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface ProxyRuntimeState {
   running: boolean
   listenHost: string
@@ -59,6 +74,8 @@ export interface AppConfig {
   serverProfile: ServerProfile
   session: SavedSession
   proxy: ProxySettings
+  profiles: ConnectionProfile[]
+  activeProfileId: string
 }
 
 export interface PublicSettings {
@@ -122,6 +139,9 @@ export interface ConnectApi {
   login: (input: { serverUrl: string; email: string; password: string }) => Promise<LoginResult>
   completeLogin2FA: (input: { serverUrl: string; tempToken: string; code: string }) => Promise<LoginResult>
   listKeys: () => Promise<ApiKeyRecord[]>
+  createProfile: (input: { name: string }) => Promise<AppConfig>
+  activateProfile: (profileId: string) => Promise<AppConfig>
+  deleteProfile: (profileId: string) => Promise<AppConfig>
   startProxy: (input?: Partial<ProxySettings>) => Promise<ProxyRuntimeState>
   stopProxy: () => Promise<ProxyRuntimeState>
   getProxyState: () => Promise<ProxyRuntimeState>

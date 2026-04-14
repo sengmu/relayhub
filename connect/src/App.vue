@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { ApiKeyRecord, AppConfig, ProxyRuntimeState, PublicSettings, UpdateState } from './shared/contracts'
+import type { ApiKeyRecord, AppConfig, ConnectionProfile, ProxyRuntimeState, PublicSettings, UpdateState } from './shared/contracts'
 
-type SectionKey = 'overview' | 'account' | 'billing' | 'keys' | 'templates' | 'updates'
+type SectionKey = 'overview' | 'profiles' | 'account' | 'billing' | 'keys' | 'templates' | 'diagnostics' | 'updates'
 
 const config = ref<AppConfig | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
@@ -16,6 +16,7 @@ const registerVerifyCode = ref('')
 const registerPromoCode = ref('')
 const registerInvitationCode = ref('')
 const totpCode = ref('')
+const profileName = ref('当前配置')
 const statusMessage = ref('准备就绪')
 const busy = ref(false)
 const currentSection = ref<SectionKey>('overview')
@@ -23,10 +24,12 @@ let updatePollTimer: number | null = null
 
 const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: 'overview', label: '总览', hint: '连接状态与核心信息' },
+  { key: 'profiles', label: '配置集', hint: 'cc-switch 风格的一键切换台' },
   { key: 'account', label: '账户登录', hint: '服务器、登录、注册、2FA' },
   { key: 'billing', label: '订阅与额度', hint: '余额、用量与续费建议' },
   { key: 'keys', label: 'API Key', hint: '选择 Key 并启动本地代理' },
   { key: 'templates', label: '接入模板', hint: 'Cherry Studio / OpenWebUI / CLI' },
+  { key: 'diagnostics', label: '诊断', hint: '连通性、Key 与更新状态' },
   { key: 'updates', label: '软件更新', hint: '检查、下载并安装更新' }
 ]
 
@@ -38,6 +41,8 @@ const emailVerifyEnabled = computed(() => !!publicSettings.value?.email_verify_e
 const promoCodeEnabled = computed(() => !!publicSettings.value?.promo_code_enabled)
 const invitationCodeEnabled = computed(() => !!publicSettings.value?.invitation_code_enabled)
 const turnstileEnabled = computed(() => !!publicSettings.value?.turnstile_enabled)
+const activeProfile = computed(() => config.value?.profiles.find((profile) => profile.id === config.value?.activeProfileId) ?? null)
+const profileCount = computed(() => config.value?.profiles.length ?? 0)
 const localBaseUrl = computed(() => {
   const state = proxyState.value ?? config.value?.proxy
   if (!state) return 'http://127.0.0.1:3456/v1'
@@ -64,6 +69,57 @@ const accountBadge = computed(() => {
 })
 const currentNav = computed(() => navItems.find((item) => item.key === currentSection.value) ?? navItems[0])
 const activeKey = computed(() => apiKeys.value.find((key) => key.id === selectedKeyId.value) ?? null)
+const profileCards = computed(() => {
+  const profiles = config.value?.profiles ?? []
+  return profiles.map((profile) => ({
+    ...profile,
+    isActive: profile.id === config.value?.activeProfileId,
+    keyLabel: profile.selectedApiKeyId ? `#${profile.selectedApiKeyId}` : '未绑定',
+    proxyLabel: `${profile.listenHost}:${profile.listenPort}`
+  }))
+})
+const profileSummary = computed(() => {
+  const profile = activeProfile.value
+  return {
+    name: profile?.name || '默认配置',
+    server: profile?.serverUrl || serverUrl.value,
+    key: profile?.selectedApiKeyId ? `#${profile.selectedApiKeyId}` : '未绑定',
+    endpoint: profile ? `http://${profile.listenHost}:${profile.listenPort}/v1` : localBaseUrl.value
+  }
+})
+const templateCards = computed(() => {
+  const baseUrl = localBaseUrl.value
+  const activeKeyLabel = activeKey.value ? `${activeKey.value.name} · #${activeKey.value.id}` : '先选择一个 API Key'
+  return [
+    {
+      eyebrow: 'GUI',
+      title: 'Cherry Studio / OpenWebUI',
+      description: '这类 OpenAI 兼容客户端通常只需要 Base URL 和 API Key。',
+      meta: `当前可直接复制到本地代理：${baseUrl}`,
+      snippet: `Base URL: ${baseUrl}\nAPI Key: ${activeKey.value?.key || 'sk-xxx'}`,
+      actionLabel: '复制 Base URL',
+      actionText: baseUrl
+    },
+    {
+      eyebrow: 'CLI',
+      title: 'Claude Code / Codex / 终端工具',
+      description: '先把本地代理作为兼容入口，再让 CLI 读取它。',
+      meta: `当前 Key：${activeKeyLabel}`,
+      snippet: `export OPENAI_BASE_URL="${baseUrl}"\nexport OPENAI_API_KEY="${activeKey.value?.key || 'sk-xxx'}"`,
+      actionLabel: '复制环境变量',
+      actionText: `export OPENAI_BASE_URL="${baseUrl}"\nexport OPENAI_API_KEY="${activeKey.value?.key || 'sk-xxx'}"`
+    },
+    {
+      eyebrow: 'CHECK',
+      title: '连通性快速自检',
+      description: '用一条命令确认本地代理、授权和模型列表都能返回。',
+      meta: '适合启动失败、Key 不对或远端不可达时排查。',
+      snippet: `curl -H "Authorization: Bearer ${activeKey.value?.key || 'sk-xxx'}" ${baseUrl}/models`,
+      actionLabel: '复制自检命令',
+      actionText: `curl -H "Authorization: Bearer ${activeKey.value?.key || 'sk-xxx'}" ${baseUrl}/models`
+    }
+  ]
+})
 const keyQuotaSummary = computed(() => {
   const keys = apiKeys.value
   const totalQuota = keys.reduce((sum, key) => sum + (Number.isFinite(key.quota) ? key.quota : 0), 0)
@@ -146,10 +202,55 @@ const overviewStats = computed(() => [
   }
 ])
 
+const diagnosticCards = computed(() => [
+  {
+    label: '登录',
+    value: isLoggedIn.value ? '已连接' : '未登录',
+    detail: isLoggedIn.value ? `当前用户：${config.value?.session.user?.username || '—'}` : '先完成登录后再选 Key',
+    tone: isLoggedIn.value ? 'ok' : 'warn'
+  },
+  {
+    label: 'Key 选择',
+    value: selectedKeyId.value ? `#${selectedKeyId.value}` : '未选择',
+    detail: activeKey.value ? `${activeKey.value.name} · ${activeKey.value.status}` : '从列表里点一个可用 Key',
+    tone: selectedKeyId.value ? 'ok' : 'warn'
+  },
+  {
+    label: '本地代理',
+    value: proxyState.value?.running ? '运行中' : '未运行',
+    detail: proxyState.value?.running ? localBaseUrl.value : '启动代理后，客户端指向这个地址',
+    tone: proxyState.value?.running ? 'ok' : 'idle'
+  },
+  {
+    label: '更新通道',
+    value: updateState.value?.status || 'idle',
+    detail: updateState.value?.message || '检查更新会从 GitHub Release 拉取元数据',
+    tone: updateState.value?.status === 'error' ? 'warn' : updateState.value?.available ? 'ok' : 'idle'
+  }
+])
+
+const diagnosticHeadline = computed(() => {
+  if (!isLoggedIn.value) return '先登录，再接入'
+  if (!selectedKeyId.value) return '先选择一个 Key'
+  if (!proxyState.value?.running) return '可以启动本地代理'
+  if (updateState.value?.available) return '有新版本可升级'
+  return '连接正常'
+})
+
+const nextAction = computed(() => {
+  if (!isLoggedIn.value) return '先在“账户登录”里登录你的 sub2api 账号。'
+  if (!selectedKeyId.value) return '前往“API Key”页，选择一个可用的 Key。'
+  if (!proxyState.value?.running) return '点击“启动本地代理”，把本地入口接给客户端。'
+  if (updateState.value?.available) return '也可以先去“软件更新”页完成升级。'
+  return '一切正常，可以直接在 Cherry Studio / OpenWebUI / CLI 中使用本地 Base URL。'
+})
+
+
 async function refreshConfig() {
   config.value = await window.connectApi.getConfig()
   serverUrl.value = config.value.serverProfile.serverUrl
   email.value = config.value.serverProfile.email
+  profileName.value = config.value.profiles.find((profile) => profile.id === config.value?.activeProfileId)?.name || '当前配置'
   proxyState.value = await window.connectApi.getProxyState()
 }
 
@@ -273,6 +374,87 @@ async function loadKeys() {
     }
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : '无法加载 API Key'
+  }
+}
+
+async function copyText(text: string, label: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    statusMessage.value = `${label} 已复制。`
+  } catch {
+    statusMessage.value = '复制失败，请手动选择文本。'
+  }
+}
+
+async function createProfileFromCurrent() {
+  busy.value = true
+  try {
+    const name = profileName.value.trim() || '未命名配置'
+    config.value = await window.connectApi.createProfile({ name })
+    await refreshConfig()
+    statusMessage.value = `已保存为配置集「${name}」。`
+    currentSection.value = 'profiles'
+  } catch (error) {
+    statusMessage.value = error instanceof Error ? error.message : '创建配置集失败'
+  } finally {
+    busy.value = false
+  }
+}
+
+async function activateProfile(profile: ConnectionProfile) {
+  busy.value = true
+  try {
+    config.value = await window.connectApi.activateProfile(profile.id)
+    apiKeys.value = []
+    await refreshConfig()
+    await loadKeys()
+    currentSection.value = 'overview'
+    statusMessage.value = `已切换到配置集「${profile.name}」。`
+  } catch (error) {
+    statusMessage.value = error instanceof Error ? error.message : '切换配置集失败'
+  } finally {
+    busy.value = false
+  }
+}
+
+async function deleteProfile(profile: ConnectionProfile) {
+  if (profile.id === config.value?.activeProfileId) {
+    statusMessage.value = '当前激活的配置集不能直接删除，请先切换到其他配置集。'
+    return
+  }
+  if (!window.confirm(`确认删除配置集「${profile.name}」吗？`)) {
+    return
+  }
+  busy.value = true
+  try {
+    config.value = await window.connectApi.deleteProfile(profile.id)
+    await refreshConfig()
+    statusMessage.value = `配置集「${profile.name}」已删除。`
+  } catch (error) {
+    statusMessage.value = error instanceof Error ? error.message : '删除配置集失败'
+  } finally {
+    busy.value = false
+  }
+}
+
+async function activateKey(key: ApiKeyRecord) {
+  busy.value = true
+  try {
+    if (proxyState.value?.running) {
+      proxyState.value = await window.connectApi.stopProxy()
+    }
+    proxyState.value = await window.connectApi.startProxy({
+      selectedApiKey: key.key,
+      selectedApiKeyId: key.id
+    })
+    await refreshConfig()
+    await loadKeys()
+    currentSection.value = 'overview'
+    statusMessage.value = `已切换到 ${key.name} 并启动本地代理。`
+  } catch (error) {
+    statusMessage.value = error instanceof Error ? error.message : '切换 Key 失败'
+  } finally {
+    busy.value = false
   }
 }
 
@@ -403,6 +585,10 @@ onBeforeUnmount(() => {
       <div class="sidebar-footer card-surface">
         <div class="status-chip" :class="statusTone">{{ proxyState?.running ? '代理已连接' : '等待连接' }}</div>
         <div class="sidebar-meta">
+          <span>当前配置</span>
+          <strong>{{ profileSummary.name }}</strong>
+        </div>
+        <div class="sidebar-meta">
           <span>本地入口</span>
           <strong>{{ localBaseUrl }}</strong>
         </div>
@@ -442,6 +628,7 @@ onBeforeUnmount(() => {
               <button :disabled="busy || !selectedKeyId || proxyState?.running" @click="startProxy">启动本地代理</button>
               <button class="secondary" :disabled="busy || !proxyState?.running" @click="stopProxy">停止代理</button>
               <button class="secondary" :disabled="busy" @click="currentSection = 'billing'">查看订阅</button>
+              <button class="secondary" :disabled="busy" @click="currentSection = 'profiles'">配置集</button>
             </div>
           </div>
           <div class="hero-summary">
@@ -463,6 +650,7 @@ onBeforeUnmount(() => {
             <div class="kv"><span>服务器地址</span><strong>{{ serverUrl }}</strong></div>
             <div class="kv"><span>本地 Base URL</span><strong>{{ localBaseUrl }}</strong></div>
             <div class="kv"><span>选中 Key</span><strong>{{ activeKey?.name || '未选择' }}</strong></div>
+            <div class="kv"><span>当前配置</span><strong>{{ profileSummary.name }}</strong></div>
             <div class="kv"><span>可用 API Key</span><strong>{{ apiKeys.length }}</strong></div>
           </article>
 
@@ -489,6 +677,58 @@ onBeforeUnmount(() => {
             </div>
           </article>
         </div>
+      </section>
+
+      <section v-else-if="currentSection === 'profiles'" class="content-grid two-col-grid">
+        <article class="panel card-surface stack">
+          <div class="section-head">
+            <h3>当前配置</h3>
+            <span class="status-chip" :class="proxyState?.running ? 'ok' : 'idle'">{{ profileSummary.name }}</span>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">当前生效信息</p>
+            <div class="kv"><span>配置名</span><strong>{{ profileSummary.name }}</strong></div>
+            <div class="kv"><span>服务器</span><strong>{{ profileSummary.server }}</strong></div>
+            <div class="kv"><span>本地入口</span><strong>{{ profileSummary.endpoint }}</strong></div>
+            <div class="kv"><span>当前 Key</span><strong>{{ profileSummary.key }}</strong></div>
+            <div class="kv"><span>配置总数</span><strong>{{ profileCount }}</strong></div>
+          </div>
+          <label>
+            <span>保存为配置集名称</span>
+            <input v-model="profileName" placeholder="例如：日常桌面 / 研发工作区" />
+          </label>
+          <div class="row">
+            <button :disabled="busy" @click="createProfileFromCurrent">保存当前配置</button>
+            <button class="secondary" :disabled="busy" @click="currentSection = 'keys'">去选 Key</button>
+            <button class="secondary" :disabled="busy" @click="currentSection = 'overview'">返回总览</button>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">提示</p>
+            <p class="muted small-text">配置集会记住服务器、端口、Base URL 与当前选中的 Key，方便快速切换路由。</p>
+          </div>
+        </article>
+
+        <article class="panel card-surface stack">
+          <div class="section-head">
+            <h3>配置集列表</h3>
+            <span class="status-chip" :class="profileCount > 0 ? 'ok' : 'idle'">{{ profileCount }} 个</span>
+          </div>
+          <div class="list" v-if="profileCards.length">
+            <article v-for="profile in profileCards" :key="profile.id" class="key-item" :class="{ active: profile.isActive }">
+              <div>
+                <strong>{{ profile.name }}</strong>
+                <p class="muted small-text">{{ profile.serverUrl }} · {{ profile.proxyLabel }} · {{ profile.keyLabel }}</p>
+                <p class="muted small-text">创建于 {{ formatDate(profile.createdAt) }} · 更新于 {{ formatDate(profile.updatedAt) }}</p>
+              </div>
+              <div class="row key-actions">
+                <span class="status-chip" :class="profile.isActive ? 'ok' : 'idle'">{{ profile.isActive ? '当前激活' : '可切换' }}</span>
+                <button class="secondary copy-btn" :disabled="busy || profile.isActive" @click="activateProfile(profile)">启用此配置</button>
+                <button class="secondary copy-btn" :disabled="busy || profile.isActive" @click="deleteProfile(profile)">删除</button>
+              </div>
+            </article>
+          </div>
+          <p v-else class="muted small-text">还没有保存过配置集，先在上方把当前连接保存下来。</p>
+        </article>
       </section>
 
       <section v-else-if="currentSection === 'account'" class="content-grid two-col-grid">
@@ -594,7 +834,10 @@ onBeforeUnmount(() => {
                 <strong>{{ key.name }}</strong>
                 <p class="muted small-text">ID #{{ key.id }} · {{ key.status }} · 已用 {{ key.quota_used }}/{{ key.quota || '∞' }}</p>
               </div>
-              <span class="status-chip" :class="key.id === selectedKeyId ? 'ok' : 'idle'">{{ key.status }}</span>
+              <div class="row key-actions">
+                <span class="status-chip" :class="key.id === selectedKeyId ? 'ok' : 'idle'">{{ key.status }}</span>
+                <button class="secondary copy-btn" :disabled="busy || key.id === selectedKeyId" @click="activateKey(key)">启用此 Key</button>
+              </div>
             </article>
           </div>
           <p v-else class="muted small-text">登录后这里会显示当前账号可用的 API Key 列表。</p>
@@ -654,25 +897,55 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="currentSection === 'templates'" class="content-grid template-grid">
-        <article class="panel card-surface stack">
-          <p class="eyebrow">Template</p>
-          <h3>Cherry Studio</h3>
-          <p class="muted">Base URL 填 {{ localBaseUrl }}，API Key 填任意字符串或 ***。</p>
+        <article v-for="item in templateCards" :key="item.title" class="panel card-surface stack template-card">
+          <div class="section-head">
+            <p class="eyebrow">{{ item.eyebrow }}</p>
+            <button class="secondary copy-btn" :disabled="busy" @click="copyText(item.actionText, item.actionLabel)">{{ item.actionLabel }}</button>
+          </div>
+          <h3>{{ item.title }}</h3>
+          <p class="muted">{{ item.description }}</p>
+          <div class="subpanel template-snippet">
+            <p class="small-title">推荐配置</p>
+            <pre>{{ item.snippet }}</pre>
+          </div>
+          <p class="muted small-text">{{ item.meta }}</p>
         </article>
+      </section>
+
+      <section v-else-if="currentSection === 'diagnostics'" class="content-grid two-col-grid">
         <article class="panel card-surface stack">
-          <p class="eyebrow">Template</p>
-          <h3>OpenWebUI</h3>
-          <p class="muted">新增 OpenAI 兼容提供商，地址指向 {{ localBaseUrl }}。</p>
+          <div class="section-head">
+            <h3>连接健康检查</h3>
+            <span class="status-chip" :class="diagnosticCards.some((item) => item.tone === 'warn') ? 'warn' : proxyState?.running ? 'ok' : 'idle'">{{ diagnosticHeadline }}</span>
+          </div>
+          <div class="diagnostic-grid">
+            <div v-for="item in diagnosticCards" :key="item.label" class="diagnostic-card" :class="item.tone">
+              <span class="metric-label">{{ item.label }}</span>
+              <strong class="metric-value">{{ item.value }}</strong>
+              <span class="metric-detail">{{ item.detail }}</span>
+            </div>
+          </div>
         </article>
+
         <article class="panel card-surface stack">
-          <p class="eyebrow">CLI</p>
-          <h3>Claude Code</h3>
-          <p class="muted">后续可补 CLI 一键配置脚本；当前先复制本地 Base URL。</p>
-        </article>
-        <article class="panel card-surface stack">
-          <p class="eyebrow">CLI</p>
-          <h3>Codex</h3>
-          <p class="muted">通过 OpenAI 兼容模式指向本地代理，减少用户直接接触远端配置。</p>
+          <h3>建议动作</h3>
+          <div class="subpanel">
+            <p class="small-title">下一步</p>
+            <p class="muted small-text">{{ nextAction }}</p>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">快速入口</p>
+            <div class="row">
+              <button class="secondary" :disabled="busy" @click="currentSection = 'account'">去登录</button>
+              <button class="secondary" :disabled="busy" @click="currentSection = 'keys'">选 Key</button>
+              <button class="secondary" :disabled="busy" @click="currentSection = 'templates'">看模板</button>
+            </div>
+          </div>
+          <div class="subpanel">
+            <p class="small-title">本地代理检查</p>
+            <div class="kv"><span>监听地址</span><strong>{{ localBaseUrl }}</strong></div>
+            <div class="kv"><span>最近错误</span><strong>{{ proxyState?.lastError || '无' }}</strong></div>
+          </div>
         </article>
       </section>
 

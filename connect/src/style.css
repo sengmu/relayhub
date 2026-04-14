@@ -515,6 +515,27 @@ strong {
   background: #fcfaf6;
 }
 
+.key-actions {
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+
+.copy-btn {
+  min-width: 116px;
+}
+
+.profile-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 620px) {
+  .profile-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1180px) {
   .hero-panel {
     grid-template-columns: 1fr;
